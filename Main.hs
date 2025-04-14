@@ -11,7 +11,6 @@ import System.Random (mkStdGen, randomR, splitGen, random, RandomGen, Random, Sp
 
 import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
-import GHC.Exts.Heap (GenClosure(value))
 
 -- user input for a simple terminal-based game is just a single-line string
 type Command = String
