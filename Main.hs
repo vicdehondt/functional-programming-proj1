@@ -7,7 +7,6 @@ import Data.Char (isAlphaNum)
 import Control.Monad (unless)
 import Text.Read (readMaybe)
 import System.Random (mkStdGen, randomR, splitGen, random, RandomGen, Random, SplitGen)
-
 import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
 
@@ -160,6 +159,7 @@ startAndEnd start end =
     else
         (start, end)
 
+-- Get row indices for REPL view based on a player's location
 fullViewRow :: Int -> [Int]
 fullViewRow player =
     if odd gameGridSize then
@@ -176,6 +176,7 @@ getGrid playerX playerY s gameMap tileLists =
         rows = [[showTile x y [firstX..lastX] [firstY..lastY] playerX playerY gameMap | x <- fullViewRow playerX] | y <- fullViewRow playerY]
     in unlines rows
 
+-- Update the game map with the randomTiles based on the player's position and line of sight
 updateTilesList :: Int -> Int -> Int -> Int -> [[Tile]] -> [[Tile]] -> [[Tile]]
 updateTilesList firstX lastX firstY lastY gameMap randomTiles
             | firstY > lastY = gameMap
@@ -184,6 +185,7 @@ updateTilesList firstX lastX firstY lastY gameMap randomTiles
                             updatedMap = firstXs ++ updateTiles firstX lastX firstY xs randomTiles : rest
                             in updateTilesList firstX lastX (firstY + 1) lastY updatedMap randomTiles
 
+-- Update the game map xs with the randomTiles based on the player's position and line of sight
 updateTiles :: Int -> Int -> Int -> [Tile] -> [[Tile]] -> [Tile]
 updateTiles firstX lastX y xs randomTiles
     | firstX > lastX = xs
@@ -192,6 +194,7 @@ updateTiles firstX lastX y xs randomTiles
             updatedXs = first ++ getTileAt firstX y randomTiles : rest
         in updateTiles (firstX + 1) lastX y updatedXs randomTiles
 
+-- Update the game map with the randomTiles based on the player's position and line of sight
 updateGameMap :: Int -> Int -> Int -> [[Tile]] -> [[Tile]] -> [[Tile]]
 updateGameMap playerX playerY s gameMap randomTiles =
     let (firstX, lastX) = startAndEnd (startIndex playerX s) (endIndex playerX s)
@@ -216,9 +219,11 @@ extractValue :: Maybe Int -> [Char]
 extractValue (Just value) = show value
 extractValue Nothing = "∞"
 
+-- Create a location object from a player's position and its tile
 getPlayerLocation :: Int -> Int -> [[Tile]] -> Location
 getPlayerLocation playerX playerY tileLists = Location playerX playerY (getTileAt playerX playerY tileLists)
 
+-- Get the closest distance value to some Tile
 getDistance :: (Tile -> Bool) -> [[Tile]] -> Location -> [Char]
 getDistance = ((extractValue .) .) . closestTileStrict
 -- . for every argument and then extractvalue
@@ -259,6 +264,7 @@ closestTileLazy match tileList startLocation = go (Seq.singleton (startLocation,
               visited' = Set.insert location visited -- Current position is visited
           in go queue' visited'
 
+-- Strict breadth-first search algorithm to get the closest tile
 closestTileStrict :: (Tile -> Bool) -> [[Tile]] -> Location -> Maybe Int
 closestTileStrict match tileList startLocation = go (Seq.singleton (startLocation, 0)) Set.empty
   where
@@ -438,12 +444,15 @@ instance Show DesertExplorerGameState where
                     | tile == Portal = "Congratulations!" ++ "\n" ++ "Total treasure worth: " ++ show treasureWorth ++ "\n" -- Portal tile, you won!
                     | otherwise = "Move!"
 
+-- Grid size for the view in the REPL
 gameGridSize :: Int
 gameGridSize = 10
 
+-- Infinite list of Unexplored Tiles
 infiniteUnexplored :: [Tile]
 infiniteUnexplored = Unexplored : infiniteUnexplored
 
+-- Infinite list of infinite lists of Unexplored Tiles
 unexploredMap :: [[Tile]]
 unexploredMap = infiniteUnexplored : unexploredMap
 
