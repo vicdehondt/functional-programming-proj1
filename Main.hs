@@ -115,7 +115,6 @@ generateTile TileChances{..} gen x tilesAbove tileLeft=
                                 else
                                     (Desert False, gen'')
 
--- Hebben we name binding gezien? "chances@" lijkt nieuw voor mij...
 -- Generate an infinite list of random Tiles based on the chances defined in the Game Config
 randomTiles :: RandomGen g => TileChances -> g -> Int -> [Tile] -> Maybe Tile -> [Tile]
 randomTiles chances@TileChances{..} gen currentX previousYTiles lastTile =
@@ -144,13 +143,13 @@ getTileAt x y tileLists = (tileLists !! y) !! x
 startIndex :: Int -> Int -> Int
 startIndex x s =
     if odd s then
-        x - (s `div` 2)
+        x - s `div` 2
     else
-        x - (s `div` 2) - 1
+        x - s `div` 2 - 1
 
 -- Get the end index of tiles to display based on the players line of sight
 endIndex :: Int -> Int -> Int
-endIndex x s = x + (s `div` 2)
+endIndex x s = x + s `div` 2
 
 -- Combine startIndex and endIndex to get the indices of tiles to display
 -- The player is always in the center of the map/grid unless the indices would become negative
@@ -164,9 +163,9 @@ startAndEnd start end =
 fullViewRow :: Int -> [Int]
 fullViewRow player =
     if odd gameGridSize then
-        [(player - (gameGridSize `div` 2))..(player + (gameGridSize `div` 2))]
+        [player - gameGridSize `div` 2..player + gameGridSize `div` 2]
     else
-        [(player - (gameGridSize `div` 2) + 1)..(player + (gameGridSize `div` 2))]
+        [player - gameGridSize `div` 2 + 1..player + gameGridSize `div` 2]
 
 -- Get the displayable map/grid based on a players position (x and y)
 -- Found unlines on Hoogle: https://hoogle.haskell.org/?hoogle=unlines
@@ -217,20 +216,27 @@ extractValue :: Maybe Int -> [Char]
 extractValue (Just value) = show value
 extractValue Nothing = "∞"
 
+getPlayerLocation :: Int -> Int -> [[Tile]] -> Location
+getPlayerLocation playerX playerY tileLists = Location playerX playerY (getTileAt playerX playerY tileLists)
+
+getDistance :: (Tile -> Bool) -> [[Tile]] -> Location -> [Char]
+getDistance = ((extractValue .) .) . closestTileStrict
+-- . for every argument and then extractvalue
+
 -- Compute the closest water Tile
-getWaterDistance :: Int -> Int -> [[Tile]] -> [Char]
-getWaterDistance playerX playerY tileLists = extractValue (closestTileStrict (== Water) tileLists (Location playerX playerY (getTileAt playerX playerY tileLists)))
+getWaterDistance :: [[Tile]] -> Location -> [Char]
+getWaterDistance = getDistance (== Water)
 
 -- Compute the closest desert Tile
-getDesertDistance :: Int -> Int -> [[Tile]] -> [Char]
-getDesertDistance playerX playerY tileLists = extractValue (closestTileStrict isDesert tileLists (Location playerX playerY (getTileAt playerX playerY tileLists)))
+getDesertDistance :: [[Tile]] -> Location -> [Char]
+getDesertDistance = getDistance isDesert
     where
         isDesert (Desert _) = True
         isDesert _ = False
 
 -- Compute the closest portal Tile
-getPortalDistance :: Int -> Int -> [[Tile]] -> [Char]
-getPortalDistance playerX playerY tileLists = extractValue (closestTileLazy (== Portal) tileLists (Location playerX playerY (getTileAt playerX playerY tileLists)))
+getPortalDistance :: [[Tile]] -> Location -> [Char]
+getPortalDistance = getDistance (== Portal)
 
 -- Standard breadth-first search algorithm to get the closest tile
 -- a queue to keep the path and a set to track visited locations
@@ -347,9 +353,23 @@ inputToLocation (Location x y tile) map input
 -- GAME
 
 -- Parameters as mentioned in the assignment
-data DesertExplorerGameConfig = DesertExplorerGameConfig { s :: Int, m :: Int, g :: Int, t :: Percentage, w :: Percentage, p :: Percentage, l :: Percentage, ll :: Percentage}
+data DesertExplorerGameConfig = DesertExplorerGameConfig {
+    s :: Int,
+    m :: Int,
+    g :: Int,
+    t :: Percentage,
+    w :: Percentage,
+    p :: Percentage,
+    l :: Percentage,
+    ll :: Percentage }
 -- The map/grid, line of sight, treasure points, water supply and location is kept in state
-data DesertExplorerGameState = DesertExplorerGameState { randomTilesMap :: [[Tile]], map :: [[Tile]], lineOfSight :: Int, treasureWorth :: Int, waterSupply :: WaterSupply, lastLocation :: Location }
+data DesertExplorerGameState = DesertExplorerGameState {
+    randomTilesMap :: [[Tile]],
+    map :: [[Tile]],
+    lineOfSight :: Int,
+    treasureWorth :: Int,
+    waterSupply :: WaterSupply,
+    lastLocation :: Location }
 
 -- Update the state every input to update the water supply, treasure points and location of the player
 -- Using fmap to map the location to the game state: https://hoogle.haskell.org/?hoogle=fmap
@@ -362,14 +382,17 @@ instance GameState DesertExplorerGameState where
             let Location playerX playerY tile = newLocation
             in DesertExplorerGameState {
                 randomTilesMap = randomTilesMap
-                -- , map = map
                 , map = updateGameMap playerX playerY lineOfSight map randomTilesMap
                 , lineOfSight = lineOfSight
                 , treasureWorth = updateTreasureWorth newLocation treasureWorth
                 , waterSupply = updateWaterSupply newLocation waterSupply
                 , lastLocation = newLocation
                 }) maybeNewLocation
-    isFinalState DesertExplorerGameState{lastLocation = Location x y tile, waterSupply = WaterSupply current _, ..} = tile == Portal || tile == Lava || current == 0
+    isFinalState DesertExplorerGameState{
+        lastLocation = Location x y tile,
+        waterSupply = WaterSupply current _,
+        ..} =
+            tile == Portal || tile == Lava || current == 0
 
 -- Instantiate the tile chances and start the game at location (0, 0) with a full water supply and no treasure points
 -- GIVEN BY NOAH, adapted for assignment
@@ -377,31 +400,43 @@ instance TerminalGame DesertExplorerGameState DesertExplorerGameConfig where
     initialState DesertExplorerGameConfig{..}
         | validGameParameters DesertExplorerGameConfig{..} =
             let
-                randomTilesMap = generateTilesList g TileChances { treasureChance = t, waterChance = w, portalChance = p, singleLavaChance = l, adjacentLavaChance = ll }
-                gameMap = updateGameMap 0 0 s unexploredMap randomTilesMap in
-                Right (DesertExplorerGameState randomTilesMap gameMap s 0 (WaterSupply m m) (Location 0 0 (getTileAt 0 0 gameMap)))
+                randomTilesMap = generateTilesList g TileChances {
+                    treasureChance = t,
+                    waterChance = w,
+                    portalChance = p,
+                    singleLavaChance = l,
+                    adjacentLavaChance = ll }
+                gameMap = updateGameMap 0 0 s unexploredMap randomTilesMap
+                waterSupply = WaterSupply m m
+                startLocation = Location 0 0 (getTileAt 0 0 gameMap) in
+                Right (DesertExplorerGameState randomTilesMap gameMap s 0 waterSupply startLocation)
         | otherwise = Left "Invalid configuration"
 
 -- Display the map/grid and state of the game
 -- Display the necessary message and information when won or lost
 -- GIVEN BY NOAH, adapted for assignment
 instance Show DesertExplorerGameState where
-    show DesertExplorerGameState{ lastLocation = Location playerX playerY tile, waterSupply = WaterSupply current maximum, .. } =
-        unlines [
-            [],
-            getGrid playerX playerY lineOfSight map randomTilesMap,
-            "Total treasure worth: " ++ show treasureWorth,
-            "Total water left: " ++ show current ++ "/" ++ show maximum,
-            "Closest water tile: " ++ getWaterDistance playerX playerY randomTilesMap,
-            "Closest desert tile: " ++ getDesertDistance playerX playerY randomTilesMap,
-            "Closest portal tile: " ++ getPortalDistance playerX playerY randomTilesMap,
-            [],
-            report waterSupply tile
-        ]
-        where report waterSupply tile
-                | tile == Lava || current == 0 = "You died, GAME OVER"
-                | tile == Portal = "Congratulations!" ++ "\n" ++ "Total treasure worth: " ++ show treasureWorth ++ "\n" -- Portal tile, you won!
-                | otherwise = "Move!"
+    show DesertExplorerGameState{
+        lastLocation = Location playerX playerY tile,
+        waterSupply = WaterSupply current maximum,
+        .. } =
+            unlines [
+                [],
+                getGrid playerX playerY lineOfSight map randomTilesMap,
+                "Total treasure worth: " ++ show treasureWorth,
+                "Total water left: " ++ show current ++ "/" ++ show maximum,
+                "Closest water tile: " ++ getWaterDistance randomTilesMap playerLocation,
+                "Closest desert tile: " ++ getDesertDistance randomTilesMap playerLocation,
+                "Closest portal tile: " ++ getPortalDistance randomTilesMap playerLocation,
+                [],
+                report waterSupply tile
+            ]
+            where
+                playerLocation = getPlayerLocation playerX playerY randomTilesMap
+                report waterSupply tile
+                    | tile == Lava || current == 0 = "You died, GAME OVER"
+                    | tile == Portal = "Congratulations!" ++ "\n" ++ "Total treasure worth: " ++ show treasureWorth ++ "\n" -- Portal tile, you won!
+                    | otherwise = "Move!"
 
 gameGridSize :: Int
 gameGridSize = 10
@@ -413,4 +448,12 @@ unexploredMap :: [[Tile]]
 unexploredMap = infiniteUnexplored : unexploredMap
 
 -- Start the game
-main = runGame DesertExplorerGameConfig { s = 5, m = 10, g = 46, t = makePercentage 50, w = makePercentage 20, p = makePercentage 10, l = makePercentage 5, ll = makePercentage 10 }
+main = runGame DesertExplorerGameConfig {
+    s = 5,
+    m = 10,
+    g = 46,
+    t = makePercentage 50,
+    w = makePercentage 20,
+    p = makePercentage 10,
+    l = makePercentage 5,
+    ll = makePercentage 10 }
