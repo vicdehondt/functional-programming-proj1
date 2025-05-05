@@ -1,4 +1,3 @@
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
@@ -34,7 +33,7 @@ fromPercentage (Percentage p) = p
 
 -- Tile type for the map/grid of the game
 -- Desert Tiles keep a boolean to know whether there is a treasure or not
-data Tile = Desert Bool | Water | Lava | Portal
+data Tile = Desert Bool | Water | Lava | Portal | Unexplored
     deriving (Show, Eq)
 
 -- Because of "Desert Bool", Enum needs to be explicitly defined
@@ -43,16 +42,18 @@ instance Enum Tile where
     toEnum 1 = Water
     toEnum 2 = Lava
     toEnum 3 = Portal
+    toEnum 4 = Unexplored
 
     fromEnum (Desert _) = 0
     fromEnum Water      = 1
     fromEnum Lava       = 2
     fromEnum Portal     = 3
+    fromEnum Unexplored     = 4
 
 -- Because of "Desert Bool", Bounded needs to be explicitly defined
 instance Bounded Tile where
     minBound = Desert False
-    maxBound = Portal
+    maxBound = Unexplored
 
 -- Simple location type
 data Location = Location { x :: Int, y :: Int, tile :: Tile }
@@ -145,7 +146,7 @@ startIndex x s =
     if odd s then
         x - (s `div` 2)
     else
-        x - (s `div` 2) + 1
+        x - (s `div` 2) - 1
 
 -- Get the end index of tiles to display based on the players line of sight
 endIndex :: Int -> Int -> Int
@@ -160,25 +161,56 @@ startAndEnd start end =
     else
         (start, end)
 
+fullViewRow :: Int -> [Int]
+fullViewRow player =
+    if odd gameGridSize then
+        [(player - (gameGridSize `div` 2))..(player + (gameGridSize `div` 2))]
+    else
+        [(player - (gameGridSize `div` 2) + 1)..(player + (gameGridSize `div` 2))]
+
 -- Get the displayable map/grid based on a players position (x and y)
 -- Found unlines on Hoogle: https://hoogle.haskell.org/?hoogle=unlines
-getGrid :: Int -> Int -> Int -> [[Tile]] -> [Char]
-getGrid playerX playerY s tileLists =
+getGrid :: Int -> Int -> Int -> [[Tile]] -> [[Tile]] -> [Char]
+getGrid playerX playerY s gameMap tileLists =
     let (firstX, lastX) = startAndEnd (startIndex playerX s) (endIndex playerX s)
         (firstY, lastY) = startAndEnd (startIndex playerY s) (endIndex playerY s)
-        rows = [[showTile x y playerX playerY tileLists | x <- [firstX..lastX]] | y <- [firstY..lastY]]
+        rows = [[showTile x y [firstX..lastX] [firstY..lastY] playerX playerY gameMap | x <- fullViewRow playerX] | y <- fullViewRow playerY]
     in unlines rows
+
+updateTilesList :: Int -> Int -> Int -> Int -> [[Tile]] -> [[Tile]] -> [[Tile]]
+updateTilesList firstX lastX firstY lastY gameMap randomTiles
+            | firstY > lastY = gameMap
+            | otherwise = let
+                            (firstXs,xs:rest) = splitAt firstY gameMap
+                            updatedMap = firstXs ++ updateTiles firstX lastX firstY xs randomTiles : rest
+                            in updateTilesList firstX lastX (firstY + 1) lastY updatedMap randomTiles
+
+updateTiles :: Int -> Int -> Int -> [Tile] -> [[Tile]] -> [Tile]
+updateTiles firstX lastX y xs randomTiles
+    | firstX > lastX = xs
+    | otherwise =
+        let (first,x:rest) = splitAt firstX xs
+            updatedXs = first ++ getTileAt firstX y randomTiles : rest
+        in updateTiles (firstX + 1) lastX y updatedXs randomTiles
+
+updateGameMap :: Int -> Int -> Int -> [[Tile]] -> [[Tile]] -> [[Tile]]
+updateGameMap playerX playerY s gameMap randomTiles =
+    let (firstX, lastX) = startAndEnd (startIndex playerX s) (endIndex playerX s)
+        (firstY, lastY) = startAndEnd (startIndex playerY s) (endIndex playerY s)
+    in updateTilesList firstX lastX firstY lastY gameMap randomTiles
 
 -- Convert a tile into a Char representation
 -- When the player is standing on the tile, give it the character '@'
-showTile :: Int -> Int -> Int -> Int -> [[Tile]] -> Char
-showTile x y playerX playerY tileLists
+showTile :: Int -> Int -> [Int] -> [Int] -> Int -> Int -> [[Tile]] -> Char
+showTile x y canSeeX canSeeY playerX playerY gameMap
     | x == playerX && y == playerY = '@'
-    | otherwise = convert (getTileAt x y tileLists) where
+    | x < 0 || y < 0 = '?'
+    | otherwise = convert (getTileAt x y gameMap) where
         convert (Desert _) = 'D'
         convert Water = 'W'
         convert Lava = 'L'
         convert Portal = 'P'
+        convert Unexplored = '?'
 
 -- Get an exact character value of a Maybe Int or an infinite character when Nothing
 extractValue :: Maybe Int -> [Char]
@@ -187,11 +219,11 @@ extractValue Nothing = "∞"
 
 -- Compute the closest water Tile
 getWaterDistance :: Int -> Int -> [[Tile]] -> [Char]
-getWaterDistance playerX playerY tileLists = extractValue (closestTileLazy (== Water) tileLists (Location playerX playerY (getTileAt playerX playerY tileLists)))
+getWaterDistance playerX playerY tileLists = extractValue (closestTileStrict (== Water) tileLists (Location playerX playerY (getTileAt playerX playerY tileLists)))
 
 -- Compute the closest desert Tile
 getDesertDistance :: Int -> Int -> [[Tile]] -> [Char]
-getDesertDistance playerX playerY tileLists = extractValue (closestTileLazy isDesert tileLists (Location playerX playerY (getTileAt playerX playerY tileLists)))
+getDesertDistance playerX playerY tileLists = extractValue (closestTileStrict isDesert tileLists (Location playerX playerY (getTileAt playerX playerY tileLists)))
     where
         isDesert (Desert _) = True
         isDesert _ = False
@@ -205,7 +237,7 @@ getPortalDistance playerX playerY tileLists = extractValue (closestTileLazy (== 
 closestTileLazy :: (Tile -> Bool) -> [[Tile]] -> Location -> Maybe Int
 closestTileLazy match tileList startLocation = go (Seq.singleton (startLocation, 0)) Set.empty
   where
-    go Seq.Empty _ = Nothing  -- Shouldn't happen in an infinite world unless no water
+    go Seq.Empty _ = Nothing -- Shouldn't happen in an infinite world unless no water
     go ((location@(Location x y tile), dist) Seq.:<| queue) visited
       | Set.member location visited = go queue visited -- Already visited, skip
       | tile == Lava = go queue (Set.insert location visited) -- Lava, add to visited
@@ -220,6 +252,28 @@ closestTileLazy match tileList startLocation = go (Seq.singleton (startLocation,
               queue' = queue Seq.>< Seq.fromList [(newLocation, dist+1) | newLocation <- neighbors] -- Add new locations to end of queue (bfs)
               visited' = Set.insert location visited -- Current position is visited
           in go queue' visited'
+
+closestTileStrict :: (Tile -> Bool) -> [[Tile]] -> Location -> Maybe Int
+closestTileStrict match tileList startLocation = go (Seq.singleton (startLocation, 0)) Set.empty
+  where
+    go Seq.Empty _ = Nothing -- Shouldn't happen in an infinite world unless no water
+    go ((location@(Location x y tile), dist) Seq.:<| queue) visited
+      | Set.member location visited = go queue visited -- Already visited, skip
+      | tile == Lava =  -- Lava, add to visited
+          let visited' = Set.insert location visited
+          in visited' `seq` go queue visited'
+      | dist > 0 && match tile = Just dist -- Not current position and is tile we are looking for, found
+      | otherwise = -- Keep searching
+          let neighbors =
+                filter (\(Location x y _) -> x >= 0 && y >= 0) -- Get all directions but don't go negative
+                  [ Location (x + 1) y (getTileAt (x + 1) y tileList),
+                    Location (x - 1) y (getTileAt (x - 1) y tileList),
+                    Location x (y + 1) (getTileAt x (y + 1) tileList),
+                    Location x (y - 1) (getTileAt x (y - 1) tileList) ]
+              newSteps = [(newLoc, dist + 1) | newLoc <- neighbors, Set.notMember newLoc visited]
+              queue' = foldl' (\q step -> step `seq` q Seq.|> step) queue newSteps -- Add new locations to end of queue (bfs)
+              visited' = Set.insert location visited -- Current position is visited
+          in queue' `seq` visited' `seq` go queue' visited'
 
 -- Subtract 1 unit of the water supply (when the player moved)
 -- or refill the supply (moved to a water Tile)
@@ -238,9 +292,8 @@ updateTreasureWorth (Location x y tile) oldTreasureWorth =
 
 -- Same as isAlphaNum but for WASD keys
 readWASD :: [Char] -> Maybe Char
-readWASD string
-    | length string == 1 && head string `elem` "wasd" = Just $ head string
-    | otherwise = Nothing
+readWASD [c] | c `elem` "wasd" = Just c
+readWASD _ = Nothing
 
 -- GIVEN BY NOAH
 promptForInput :: IO Command
@@ -296,7 +349,7 @@ inputToLocation (Location x y tile) map input
 -- Parameters as mentioned in the assignment
 data DesertExplorerGameConfig = DesertExplorerGameConfig { s :: Int, m :: Int, g :: Int, t :: Percentage, w :: Percentage, p :: Percentage, l :: Percentage, ll :: Percentage}
 -- The map/grid, line of sight, treasure points, water supply and location is kept in state
-data DesertExplorerGameState = DesertExplorerGameState { map :: [[Tile]], lineOfSight :: Int, treasureWorth :: Int, waterSupply :: WaterSupply, lastLocation :: Location }
+data DesertExplorerGameState = DesertExplorerGameState { randomTilesMap :: [[Tile]], map :: [[Tile]], lineOfSight :: Int, treasureWorth :: Int, waterSupply :: WaterSupply, lastLocation :: Location }
 
 -- Update the state every input to update the water supply, treasure points and location of the player
 -- Using fmap to map the location to the game state: https://hoogle.haskell.org/?hoogle=fmap
@@ -304,13 +357,18 @@ data DesertExplorerGameState = DesertExplorerGameState { map :: [[Tile]], lineOf
 -- GIVEN BY NOAH, adapted for assignment
 instance GameState DesertExplorerGameState where
     nextState DesertExplorerGameState{..} input =
-        fmap (\newLocation -> DesertExplorerGameState
-        { map = map
-        , lineOfSight = lineOfSight
-        , treasureWorth = updateTreasureWorth newLocation treasureWorth
-        , waterSupply = updateWaterSupply newLocation waterSupply
-        , lastLocation = newLocation
-        }) (inputToLocation lastLocation map (readWASD input)) --readWASD returns Nothing if the input string can't be parsed as a WASD character
+        let maybeNewLocation = inputToLocation lastLocation map (readWASD input) --readWASD returns Nothing if the input string can't be parsed as a WASD character
+        in fmap (\newLocation ->
+            let Location playerX playerY tile = newLocation
+            in DesertExplorerGameState {
+                randomTilesMap = randomTilesMap
+                -- , map = map
+                , map = updateGameMap playerX playerY lineOfSight map randomTilesMap
+                , lineOfSight = lineOfSight
+                , treasureWorth = updateTreasureWorth newLocation treasureWorth
+                , waterSupply = updateWaterSupply newLocation waterSupply
+                , lastLocation = newLocation
+                }) maybeNewLocation
     isFinalState DesertExplorerGameState{lastLocation = Location x y tile, waterSupply = WaterSupply current _, ..} = tile == Portal || tile == Lava || current == 0
 
 -- Instantiate the tile chances and start the game at location (0, 0) with a full water supply and no treasure points
@@ -318,8 +376,10 @@ instance GameState DesertExplorerGameState where
 instance TerminalGame DesertExplorerGameState DesertExplorerGameConfig where
     initialState DesertExplorerGameConfig{..}
         | validGameParameters DesertExplorerGameConfig{..} =
-            let gameMap = generateTilesList g TileChances { treasureChance = t, waterChance = w, portalChance = p, singleLavaChance = l, adjacentLavaChance = ll } in
-                Right (DesertExplorerGameState gameMap s 0 (WaterSupply m m) (Location 0 0 (getTileAt 0 0 gameMap)))
+            let
+                randomTilesMap = generateTilesList g TileChances { treasureChance = t, waterChance = w, portalChance = p, singleLavaChance = l, adjacentLavaChance = ll }
+                gameMap = updateGameMap 0 0 s unexploredMap randomTilesMap in
+                Right (DesertExplorerGameState randomTilesMap gameMap s 0 (WaterSupply m m) (Location 0 0 (getTileAt 0 0 gameMap)))
         | otherwise = Left "Invalid configuration"
 
 -- Display the map/grid and state of the game
@@ -329,12 +389,12 @@ instance Show DesertExplorerGameState where
     show DesertExplorerGameState{ lastLocation = Location playerX playerY tile, waterSupply = WaterSupply current maximum, .. } =
         unlines [
             [],
-            getGrid playerX playerY lineOfSight map,
+            getGrid playerX playerY lineOfSight map randomTilesMap,
             "Total treasure worth: " ++ show treasureWorth,
             "Total water left: " ++ show current ++ "/" ++ show maximum,
-            "Closest water tile: " ++ getWaterDistance playerX playerY map,
-            "Closest desert tile: " ++ getDesertDistance playerX playerY map,
-            "Closest portal tile: " ++ getPortalDistance playerX playerY map,
+            "Closest water tile: " ++ getWaterDistance playerX playerY randomTilesMap,
+            "Closest desert tile: " ++ getDesertDistance playerX playerY randomTilesMap,
+            "Closest portal tile: " ++ getPortalDistance playerX playerY randomTilesMap,
             [],
             report waterSupply tile
         ]
@@ -343,5 +403,14 @@ instance Show DesertExplorerGameState where
                 | tile == Portal = "Congratulations!" ++ "\n" ++ "Total treasure worth: " ++ show treasureWorth ++ "\n" -- Portal tile, you won!
                 | otherwise = "Move!"
 
+gameGridSize :: Int
+gameGridSize = 10
+
+infiniteUnexplored :: [Tile]
+infiniteUnexplored = Unexplored : infiniteUnexplored
+
+unexploredMap :: [[Tile]]
+unexploredMap = infiniteUnexplored : unexploredMap
+
 -- Start the game
-main = runGame DesertExplorerGameConfig { s = 10, m = 10, g = 46, t = makePercentage 50, w = makePercentage 20, p = makePercentage 10, l = makePercentage 5, ll = makePercentage 10 }
+main = runGame DesertExplorerGameConfig { s = 5, m = 10, g = 46, t = makePercentage 50, w = makePercentage 20, p = makePercentage 10, l = makePercentage 5, ll = makePercentage 10 }
